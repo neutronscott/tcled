@@ -12,6 +12,8 @@ set modeH 1
 set silent 0
 set dirty 0
 set prompt 0
+set addr1 ""
+set addr2 ""
 
 proc readfile {file line} {
 	global bufLines curLine silent
@@ -26,17 +28,6 @@ proc readfile {file line} {
 
 	if {!$silent} { puts [string length $buf] }
 	unset buf
-}
-
-proc pushaddr {raddrlist addr} {
-	upvar $raddrlist addrlist
-	# addr1 and addr2 are like a stack. first assign 1, then assign 2.
-	# then, shift left each time.
-	if {[llength $addrlist] < 2} {
-		lappend addrlist $addr
-	} else {
-		set addrlist [list [lindex $addrlist 1] $addr]
-	}
 }
 
 proc get_buffer {start end} {
@@ -123,11 +114,12 @@ proc get_addr {line rp addr} {
 }
 
 proc parse_line {line} {
-	global curLine dbg_addrlist
+	global curLine dbg_addrlist addr1 addr2
 
-	set addrlist {}
+	set addr1 ""
+	set addr2 ""
+	set addr  ""
 	set first 1
-	set addr ""
 	set p 0
 
 	while {[string is space -strict [string index $line $p]]} { incr p }
@@ -141,14 +133,14 @@ proc parse_line {line} {
 		set ch [string index $line $p]
 		if {$addr eq "" && $first} {
 			if {$ch eq ","} {
-				pushaddr addrlist 1
+				foreach {addr1 addr2} [list $addr2 1] break
 				set addr [last_line]
 			} elseif {$ch eq ";"} {
-				pushaddr addrlist $curLine
+				foreach {addr1 addr2} [list $addr2 $curLine] break
 				set addr [last_line]
 			}
 		} else {
-			pushaddr addrlist $addr
+			foreach {addr1 addr2} [list $addr2 $addr] break
 		}
 		# should get_addr pop off the separator like get_off does? so we
 		# would check for a valid start char rather than end char?
@@ -159,8 +151,8 @@ proc parse_line {line} {
 		while {[string is space -strict [string index $line $p]]} { incr p }
 	}
 	set cmd [string range $line $p end]
-	doCommand $cmd $addrlist
-	set dbg_addrlist $addrlist ;# so we can see previous addrlist in Debug command
+	doCommand $cmd
+	set dbg_addrlist "($addr1,$addr2)" ;# so we can see previous addrlist in Debug command
 }
 
 proc setErr {msg} {
@@ -178,25 +170,26 @@ proc putErr {} {
 }
 
 # maybe this shouldn't all go together
-proc check_addrlist {raddrlist defaddr1 defaddr2 {allowzero 0}} {
-	global curLine
-	upvar $raddrlist addrlist
+proc check_addrs {defaddr1 defaddr2 {allowzero 0}} {
+	global curLine addr1 addr2
 
-	if {$defaddr1 eq "" && [llength $addrlist] != 0} {
+	if {$addr2 eq ""} {
+		if {$addr1 eq ""} {
+			set addr2 $defaddr2
+			set addr1 $defaddr1
+		} else {
+			set addr2 $addr1
+		}
+	}
+	if {$defaddr1 eq "" && $addr1 ne ""} {
 		setErr {Address not expected}
 		return -1
 	}
-	switch [llength $addrlist] {
-		0 {set addrlist [list $defaddr1 $defaddr2]}
-		1 {pushaddr addrlist [lindex $addrlist 0]}
-		2 {}
-	}
-	foreach {start end} $addrlist break
-	if {$start == 0 && ! $allowzero} {
+	if {$addr1 == 0 && ! $allowzero} {
 		setErr {Invalid address}
 		return -1
 	}
-	if {$start > $end || $start < 0 || $end > [last_line]} {
+	if {$addr1 > $addr2 || $addr1 < 0 || $addr2 > [last_line]} {
 		setErr {Invalid address range}
 		return -1
 	}
@@ -204,8 +197,8 @@ proc check_addrlist {raddrlist defaddr1 defaddr2 {allowzero 0}} {
 	return 0
 }
 
-proc doCommand {cmd addrlist} {
-	global curLine bufLines dirty modeH prompt dbg_addrlist
+proc doCommand {cmd} {
+	global curLine bufLines dirty modeH prompt dbg_addrlist addr1 addr2
 
 	set rest  ""
 	set suffix ""
@@ -215,26 +208,24 @@ proc doCommand {cmd addrlist} {
 	switch -glob -- $cmd {
 		"" -
 		[lnp] {
-			if {[check_addrlist addrlist $curLine $curLine] != 0} {return -1}
-			foreach {start end} $addrlist break
-			if {$cmd eq "n" || [string first n $suffix] != -1} { set n [expr {$start - 1}] } else { set n "" }
-			foreach line [get_buffer $start $end] {
+			if {[check_addrs $curLine $curLine] != 0} {return -1}
+			if {$cmd eq "n" || [string first n $suffix] != -1} { set n [expr {$addr1 - 1}] } else { set n "" }
+			foreach line [get_buffer $addr1 $addr2] {
 				if {$n ne ""} { puts "[incr n]	$line" } else { puts $line }
 			}
 		}
-		D { puts "addrlist=$addrlist prevaddrlist=$dbg_addrlist modeH=$modeH dirty=$dirty prompt=$prompt curLine=$curLine last=[last_line]" }
+		D { puts "addrlist=($addr1,$addr2) prevaddrlist=$dbg_addrlist modeH=$modeH dirty=$dirty prompt=$prompt curLine=$curLine last=[last_line]" }
 		H { set modeH [expr {!$modeH}] }
 		h {
 			putErr
 		}
 		i {
-			foreach {start end} $addrlist break
 			while {[gets stdin line] != -1 && $line ne "."} {
 				lappend ibuf $line
 			}
-			incr end -1 ;# we're preincrementing
+			incr addr2 -1 ;# we're preincrementing
 			foreach line $ibuf {
-				set bufLines [linsert $bufLines [incr end] $line]
+				set bufLines [linsert $bufLines [incr addr2] $line]
 			}	
 			set dirty 1
 		}
@@ -250,9 +241,8 @@ proc doCommand {cmd addrlist} {
 		}
 		Q { exit }
 		= {
-			if {[check_addrlist addrlist 1 [last_line] 1] != 0} {return -1}
-			foreach {start end} $addrlist break
-			puts "$end"
+			if {[check_addrs 1 [last_line] 1] != 0} {return -1}
+			puts "$addr2"
 		}
 		* { setErr "Invalid command"; return -1 }
 	}
