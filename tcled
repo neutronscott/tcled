@@ -3,6 +3,7 @@
 #mute (m@san.aq) 2015 public domain
 # vim: set ai ts=4 sw=4 sts=0 noet:
 
+# global pollution :(
 set promptStr {*}
 set bufLines {{}}
 set errMsg {}
@@ -67,7 +68,6 @@ proc get_offset {line rp} {
 proc get_addr {line rp addr} {
 	global curLine marks
 	upvar $rp p
-	set marks(t) 3
 	set off 0
 
 	set ch [string index $line $p]
@@ -77,7 +77,7 @@ proc get_addr {line rp addr} {
 			incr p
 			set m [string index $line $p]
 			if {[string is lower -strict $m] == 0} {
-				setErr {Invalid mark character}
+				setErr {Invalid mark}
 				return -1
 			} elseif {[info exists marks($m)] == 0} {
 				setErr {Nonexistant mark}
@@ -169,22 +169,21 @@ proc putErr {} {
 	puts stderr $errMsg
 }
 
-# maybe this shouldn't all go together
-proc check_addrs {defaddr1 defaddr2 {allowzero 0}} {
-	global curLine addr1 addr2
+proc check_addrs {{defaddr1 ""} {defaddr2 ""} {allowzero 0}} {
+	global addr1 addr2
 
+	# this if block confused the shit out of me for some reason
+	# fill addr2, then addr1, then addr2, and so on..
 	if {$addr2 eq ""} {
-		if {$addr1 eq ""} {
-			set addr2 $defaddr2
-			set addr1 $defaddr1
-		} else {
-			set addr2 $addr1
-		}
-	}
-	if {$defaddr1 eq "" && $addr1 ne ""} {
+		set addr2 $defaddr2
+		set addr1 $defaddr1
+	} elseif {$defaddr2 eq ""} {
 		setErr {Address not expected}
 		return -1
+	} elseif {$addr1 eq ""} {
+		set addr1 $addr2
 	}
+	if {$defaddr2 eq ""} {return 0} ;#uh, rethink this FIXME
 	if {$addr1 == 0 && ! $allowzero} {
 		setErr {Invalid address}
 		return -1
@@ -198,7 +197,7 @@ proc check_addrs {defaddr1 defaddr2 {allowzero 0}} {
 }
 
 proc doCommand {cmd} {
-	global curLine bufLines dirty modeH prompt dbg_addrlist addr1 addr2
+	global curLine bufLines dirty modeH prompt dbg_addrlist addr1 addr2 marks
 
 	set rest  ""
 	set suffix ""
@@ -215,22 +214,46 @@ proc doCommand {cmd} {
 			}
 		}
 		D { puts "addrlist=($addr1,$addr2) prevaddrlist=$dbg_addrlist modeH=$modeH dirty=$dirty prompt=$prompt curLine=$curLine last=[last_line]" }
-		H { set modeH [expr {!$modeH}] }
+		H {
+			if {[check_addrs] != 0} {return -1}
+			set modeH [expr {!$modeH}]
+		}
 		h {
+			if {[check_addrs] != 0} {return -1}
 			putErr
 		}
 		i {
+			if {[check_addrs $curLine $curLine 1] != 0} {return -1}
+			set addr $addr2 ;# shouldnt really change addr2 huh?
+			if {$addr == 0} {incr addr}
+			#intermediate buf incase they bail? or nah?
+			set ibuf {}
 			while {[gets stdin line] != -1 && $line ne "."} {
 				lappend ibuf $line
 			}
-			incr addr2 -1 ;# we're preincrementing
+			incr addr -2 ;# we're preincrementing
 			foreach line $ibuf {
-				set bufLines [linsert $bufLines [incr addr2] $line]
-			}	
+				set bufLines [linsert $bufLines [incr addr] $line]
+			}
+			incr addr ;# 0>1 indexing
+			set curLine $addr
 			set dirty 1
 		}
-		P { set prompt [expr {!$prompt}] }
+		k {
+			if {[check_addrs $curLine $curLine] != 0} {return -1}
+			set m [string index $rest 0]
+			if {[string is lower -strict $m] != 1} {
+				setErr {Invalid mark}
+				return -1
+			}
+			set marks($m) $addr2
+		}
+		P {
+			if {[check_addrs] != 0} {return  -1}
+			set prompt [expr {!$prompt}]
+		}
 		q {
+			if {[check_addrs] != 0} {return -1}
 			if {$dirty == 1} {
 				setErr {Warning: modified buffer}
 				incr dirty
@@ -239,14 +262,19 @@ proc doCommand {cmd} {
 				exit
 			}
 		}
-		Q { exit }
+		Q {
+			if {[check_addrs] != 0} {return -1}
+			exit
+		}
 		= {
 			if {[check_addrs 1 [last_line] 1] != 0} {return -1}
 			puts "$addr2"
 		}
-		* { setErr "Invalid command"; return -1 }
+		* {
+			setErr "Invalid command"
+			return -1
+		}
 	}
-	#set curLine $end
 }
 
 proc usage {} {
