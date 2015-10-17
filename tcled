@@ -48,31 +48,16 @@ proc get_offset {line rp} {
 	set minus 0
 	set off 0
 
-	if {[string match {[-+]} [string index $line $p]]} {
-		if {[string index $line $p] eq "-"} {set minus 1}
-		incr p
-	}
-
-	# dont skip spaces here. POSIX wants "3 ---- 2" = 1
-	if {[regexp {^[0-9]+} [string range $line $p end] off]} {
-		incr p [string length $off]
-		if {$minus} { set off [expr {0 - $off}] }
-	} else {
-		set off [expr {$minus ? -1 : 1}]
-	}
-
-	while {[string is space -strict [string index $line $p]]} { incr p }
 	return $off
 }
 
 proc get_addr {line rp addr} {
 	global curLine marks
 	upvar $rp p
-	set off 0
 
-	set ch [string index $line $p]
+	while {[string is space -strict [string index $line $p]]} { incr p }
 
-	switch -glob -- $ch {
+	switch -glob -- [string index $line $p] {
 		{'} {
 			incr p
 			set m [string index $line $p]
@@ -100,15 +85,22 @@ proc get_addr {line rp addr} {
 		default { return $addr }
 	}
 
-	while {[string is space -strict [string index $line $p]]} { incr p }
-	# next is offset. not another addr.
-	if {[string match {['.$/?]} [string index $line $p]]} {
-		setErr {Invalid address offset}
-		return -1
-	}
-	while {[string match {[-+0-9]} [string index $line $p]]} {
-		set off [get_offset $line p]
-		set addr [expr {$addr + $off}]
+	# offset loop. [-+ \t] sep
+	while 1 {
+		while {[string is space -strict [string index $line $p]]} { incr p }
+		# not time for another addr here
+		if {[string match {['.$/?]} [string index $line $p]]} {
+			setErr {Invalid address offset}
+			return -1
+		}
+		if {![string match {[-+0-9]} [string index $line $p]]} break
+
+		# dont skip spaces here. POSIX wants "3 ---- 2" = 1
+		if {[regexp {^([-+]?)([0-9]*)} [string range $line $p end] off sign digits]} {
+			incr p [string length $off]
+			if {$digits eq ""} {set off [expr 0 $sign 1]}
+			incr addr $off
+		}
 	}
 	return $addr
 }
@@ -122,14 +114,12 @@ proc parse_line {line} {
 	set first 1
 	set p 0
 
-	while {[string is space -strict [string index $line $p]]} { incr p }
 	# if <cr> alone it's +1p
 	# can't do in doCommand without fall-through
-	if {[string range $line $p end] eq ""} { return [parse_line "+1p"] }
+	if {[string trim $line] eq ""} { return [parse_line "+1p"] }
 
 	while 1 {
-		set addr [get_addr $line p $addr]
-		if {$addr == -1} { return -1 }
+		if {[set addr [get_addr $line p $addr]] == -1} { return -1 }
 		set ch [string index $line $p]
 		if {$addr eq "" && $first} {
 			if {$ch eq ","} {
@@ -142,13 +132,11 @@ proc parse_line {line} {
 		} else {
 			foreach {addr1 addr2} [list $addr2 $addr] break
 		}
-		# should get_addr pop off the separator like get_off does? so we
-		# would check for a valid start char rather than end char?
-		if {![string match {[,;]} $ch]} break
+		if {$ch eq ";"} {
+			set curLine $addr
+		} elseif {$ch ne ","} break
+		incr p ;# only incr if it was a sep, else we gobble up cmd
 		set first 0
-		if {$ch eq ";"} { set curLine $addr }
-		incr p
-		while {[string is space -strict [string index $line $p]]} { incr p }
 	}
 	set cmd [string range $line $p end]
 	doCommand $cmd
