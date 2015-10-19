@@ -19,16 +19,16 @@ set addr2 ""
 proc readfile {file line} {
 	global bufLines curLine silent
 
-	set fd [open "$file" "r"]
-	#fconfigure $fd -translation binary
+	if {[catch {set fd [open "$file" "r"]}]} {
+		return [setErr "Cannot open file"]
+	}
+	fconfigure $fd -encoding binary -translation {binary binary}
 	set buf [read $fd]
-	close $fd
-
 	set bufLines [split $buf "\n"]
 	set curLine [last_line]
 
 	if {!$silent} {puts [string length $buf]}
-	unset buf
+	close $fd
 }
 
 proc writefile {fn} {
@@ -39,12 +39,15 @@ proc writefile {fn} {
 	} elseif {$fileName == ""} {
 		set fileName $fn
 	}
-	set fd [open "$fn" "w"]
-	#fconfigure $fd -translation binary
+	if {[catch {set fd [open "$fn" "w"]}]} {
+		return [setErr "Cannot open file"]
+	}
+	fconfigure $fd -encoding binary -translation {binary binary}
 
 	set buf [join [get_buffer $addr1 $addr2] "\n"]
-	puts $fd $buf
-	if {!$silent} {puts [string length $buf]}
+	puts $fd $buf ;# this adds a \n
+	close $fd
+	if {!$silent} {puts [expr {1 + [string length $buf]}]}
 }
 
 proc get_buffer {start end} {
@@ -207,8 +210,7 @@ proc doCommand {cmd} {
 			foreach line [get_buffer $addr1 $addr2] {
 				if {$n != ""} {puts "[incr n]\t$line" } else { puts $line}
 			}
-		}
-		[ai] {
+		} [ai] {
 			if {[check_addrs $curLine "" 1] != 0} {return -1}
 			set addr $addr2 ;# shouldnt really change our global huh?
 			#intermediate buf incase they bail? or nah?
@@ -227,16 +229,20 @@ proc doCommand {cmd} {
 			incr addr ;# 0>1 indexing
 			set curLine $addr
 			set dirty 1
-		}
-		d {
+		} d {
 			if {[check_addrs $curLine] != 0} {return -1}
 			set bufLines [lreplace $bufLines [expr {$addr1 - 1}] [expr {$addr2 - 1}]]
 			set curLine $addr1
 			if {$curLine > [last_line]} {set curLine [last_line]}
 			set dirty 1
-		}
-		D {puts "addrlist=($addr1,$addr2) modeH=$modeH dirty=$dirty prompt=$prompt curLine=$curLine last=[last_line] fileName=$fileName"}
-		f {
+		} D {
+			puts "addrlist=($addr1,$addr2) modeH=$modeH dirty=$dirty prompt=$prompt curLine=$curLine last=[last_line] fileName=$fileName"
+		} e {
+			if {[check_addrs] != 0} {return -1}
+			if {$rest != ""} {set fileName [string trim $rest]}
+			if {$fileName == ""} {return [setErr "No filename set"]}
+			readfile $fileName -1
+		} f {
 			if {[check_addrs] != 0} {return -1}
 			set p 0
 			while {[string is space -strict [string index $rest $p]]} {incr p}
@@ -244,28 +250,23 @@ proc doCommand {cmd} {
 				return [setErr "Unexpected command suffix"]
 			}
 			set fileName [string range $rest $p end]
-		}
-		H {
+		} H {
 			if {[check_addrs] != 0} {return -1}
 			set modeH [expr {!$modeH}]
-		}
-		h {
+		} h {
 			if {[check_addrs] != 0} {return -1}
 			putErr
-		}
-		k {
+		} k {
 			if {[check_addrs $curLine] != 0} {return -1}
 			set m [string index $rest 0]
 			if {[string is lower -strict $m] != 1} {
 				return [setErr "Invalid mark"]
 			}
 			set marks($m) $addr2
-		}
-		P {
+		} P {
 			if {[check_addrs] != 0} {return  -1}
 			set prompt [expr {!$prompt}]
-		}
-		q {
+		} q {
 			if {[check_addrs] != 0} {return -1}
 			if {$dirty == 1} {
 				setErr "Warning: modified buffer"
@@ -274,12 +275,10 @@ proc doCommand {cmd} {
 			} else {
 				return 2
 			}
-		}
-		Q {
+		} Q {
 			if {[check_addrs] != 0} {return -1}
 			return 2
-		}
-		w {
+		} w {
 			if {[check_addrs 1 [last_line]] != 0} {return -1}
 			if {[regexp {(?:[[:space:]]+)([^[:space:]]+)} $rest -> fn]} {
 				writefile $fn
@@ -287,12 +286,10 @@ proc doCommand {cmd} {
 				writefile $fileName
 			}
 			set dirty 0
-		}
-		= {
+		} = {
 			if {[check_addrs 1 [last_line] 1] != 0} {return -1}
 			puts "$addr2"
-		}
-		* {
+		} * {
 			return [setErr "Invalid command"]
 		}
 	}
