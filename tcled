@@ -29,6 +29,7 @@ proc read_file {file line} {
 
   if {!$flag_silent} {puts [string length $buf]}
   close $fd
+  return -1
 }
 
 proc write_file {fn} {
@@ -48,6 +49,7 @@ proc write_file {fn} {
   puts $fd $buf ;# this adds a \n
   close $fd
   if {!$flag_silent} {puts [expr {1 + [string length $buf]}]}
+  return 0
 }
 
 proc get_buffer {start end} {
@@ -246,7 +248,8 @@ proc parse_command {cmd} {
       if {[check_addrs] != 0} {return -1}
       if {$rest != ""} {set file_name [string trim $rest]}
       if {$file_name == ""} {return [set_error "No filename set"]}
-      read_file $file_name -1
+      if {[read_file $file_name -1] != 0} {return -1}
+      unset marks
     } f {
       if {[check_addrs] != 0} {return -1}
       set p 0
@@ -286,14 +289,14 @@ proc parse_command {cmd} {
     } w {
       if {[check_addrs 1 [last_line]] != 0} {return -1}
       if {[regexp {(?:[[:space:]]+)([^[:space:]]+)} $rest -> fn]} {
-        write_file $fn
+        if {[write_file $fn] != 0} {return -1}
       } else {
-        write_file $file_name
+        if {[write_file $file_name] != 0} {return -1}
       }
       set flag_dirty 0
     } = {
       if {[check_addrs 1 [last_line] 1] != 0} {return -1}
-      puts "$addr2"
+      puts $addr2
     } * {
       return [set_error "Invalid command"]
     }
@@ -301,7 +304,7 @@ proc parse_command {cmd} {
 }
 
 proc usage {} {
-  puts {Usage: ed [-p prompt] [-s] file}
+  puts "Usage: ed [-p prompt] [-s] file"
 }
 
 for {set i 0} {$i < $::argc} {incr i} {
