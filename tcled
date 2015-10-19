@@ -1,333 +1,335 @@
 #!/usr/bin/tclsh
 #ed in tcl
 #mute (m@san.aq) 2015 public domain
-# vim: set ai ts=4 sw=4 sts=0 noet:
+# vim: set ai ts=2 sw=2 sts=2 et:
 
 # global pollution :(
-set promptStr {*}
-set bufLines {{}}
-set errMsg {}
-set curLine 0
-set modeH 1
-set silent 0
-set dirty 0
-set prompt 0
-set fileName ""
+set prompt_str {*}
+set buffer {{}}
+set err_str {}
+set cur_line 0
+set flag_h 0
+set flag_silent 0
+set flag_dirty 0
+set flag_prompt 0
+set file_name ""
 set addr1 ""
 set addr2 ""
 
-proc readfile {file line} {
-	global bufLines curLine silent
+proc read_file {file line} {
+  global buffer cur_line flag_silent
 
-	if {[catch {set fd [open "$file" "r"]}]} {
-		return [setErr "Cannot open file"]
-	}
-	fconfigure $fd -encoding binary -translation {binary binary}
-	set buf [read $fd]
-	set bufLines [split $buf "\n"]
-	set curLine [last_line]
+  if {[catch {set fd [open "$file" "r"]}]} {
+    return [set_error "Cannot open file"]
+  }
+  fconfigure $fd -encoding binary -translation {binary binary}
+  set buf [read $fd]
+  set buffer [split $buf "\n"]
+  set cur_line [last_line]
 
-	if {!$silent} {puts [string length $buf]}
-	close $fd
+  if {!$flag_silent} {puts [string length $buf]}
+  close $fd
 }
 
-proc writefile {fn} {
-	global fileName addr1 addr2 silent
+proc write_file {fn} {
+  global file_name addr1 addr2 flag_silent
 
-	if {$fn == ""} {
-		return [setErr "No current filename"]
-	} elseif {$fileName == ""} {
-		set fileName $fn
-	}
-	if {[catch {set fd [open "$fn" "w"]}]} {
-		return [setErr "Cannot open file"]
-	}
-	fconfigure $fd -encoding binary -translation {binary binary}
+  if {$fn == ""} {
+    return [set_error "No current filename"]
+  } elseif {$file_name == ""} {
+    set file_name $fn
+  }
+  if {[catch {set fd [open "$fn" "w"]}]} {
+    return [set_error "Cannot open file"]
+  }
+  fconfigure $fd -encoding binary -translation {binary binary}
 
-	set buf [join [get_buffer $addr1 $addr2] "\n"]
-	puts $fd $buf ;# this adds a \n
-	close $fd
-	if {!$silent} {puts [expr {1 + [string length $buf]}]}
+  set buf [join [get_buffer $addr1 $addr2] "\n"]
+  puts $fd $buf ;# this adds a \n
+  close $fd
+  if {!$flag_silent} {puts [expr {1 + [string length $buf]}]}
 }
 
 proc get_buffer {start end} {
-	global bufLines
-	
-	return [lrange $bufLines [expr {$start - 1}] [expr {$end - 1}]]
+  global buffer
+  
+  return [lrange $buffer [expr {$start - 1}] [expr {$end - 1}]]
 }
 
 proc last_line {} {
-	global bufLines
+  global buffer
 
-	return [expr {[llength $bufLines] - 1}]
+  return [expr {[llength $buffer] - 1}]
 }
 
-proc get_addr {line rp addr} {
-	global curLine marks
-	upvar $rp p
+proc parse_address {line rp addr} {
+  global cur_line marks
+  upvar $rp p
 
-	while {[string is space -strict [string index $line $p]]} {incr p}
+  while {[string is space -strict [string index $line $p]]} {incr p}
 
-	switch -glob -- [string index $line $p] {
-		{'} {
-			incr p
-			set m [string index $line $p]
-			if {[string is lower -strict $m] == 0} {
-				return [setErr "Invalid mark"]
-			} elseif {[info exists marks($m)] == 0} {
-				return [setErr "Nonexistant mark"]
-			} else {
-				set addr $marks($m)
-				incr p
-			}
-		}
-		{.} {incr p; set addr $curLine}
-		{$} {incr p; set addr [last_line]}
-		[0-9] {
-			regexp {[0-9]+} [string range $line $p end] num
-			incr p [expr {[string length $num]}]
-			set addr $num
-		}
-		{[-+]} {set addr $curLine}
-		,  {return $addr}
-		\; {return $addr}
-		default {return $addr}
-	}
+  switch -glob -- [string index $line $p] {
+    ' {
+      incr p
+      set m [string index $line $p]
+      if {[string is lower -strict $m] == 0} {
+        return [set_error "Invalid mark"]
+      } elseif {[info exists marks($m)] == 0} {
+        return [set_error "Nonexistant mark"]
+      } else {
+        set addr $marks($m)
+        incr p
+      }
+    } . {
+      incr p
+      set addr $cur_line
+    } $ {
+      incr p
+      set addr [last_line]
+    } [0-9] {
+      regexp {[0-9]+} [string range $line $p end] num
+      incr p [expr {[string length $num]}]
+      set addr $num
+    } [-+] {
+      set addr $cur_line
+    } , {
+      return $addr
+    } \; {
+      return $addr
+    } default {
+      return $addr
+    }
+  }
 
-	# offset loop. [-+ \t] sep
-	while 1 {
-		while {[string is space -strict [string index $line $p]]} {incr p}
-		# not time for another addr here
-		if {[string match {['.$/?]} [string index $line $p]]} {
-			return [setErr "Invalid address offset"]
-			return -1
-		}
-		if {![string match {[-+0-9]} [string index $line $p]]} break
+  # offset loop. [-+ \t] sep
+  while 1 {
+    while {[string is space -strict [string index $line $p]]} {incr p}
+    # not time for another addr here
+    if {[string match {['.$/?]} [string index $line $p]]} {
+      return [set_error "Invalid address offset"]
+      return -1
+    }
+    if {![string match {[-+0-9]} [string index $line $p]]} break
 
-		# dont skip spaces here. POSIX wants "3 ---- 2" = 1
-		if {[regexp {^([-+]?)([0-9]*)} [string range $line $p end] off sign digits]} {
-			incr p [string length $off]
-			if {$digits == ""} {set off [expr 0 $sign 1]}
-			incr addr $off
-		}
-	}
-	return $addr
+    # dont skip spaces here. POSIX wants "3 ---- 2" = 1
+    if {[regexp {^([-+]?)([0-9]*)} [string range $line $p end] off sign digits]} {
+      incr p [string length $off]
+      if {$digits == ""} {set off [expr 0 $sign 1]}
+      incr addr $off
+    }
+  }
+  return $addr
 }
 
 proc parse_line {line} {
-	global curLine addr1 addr2
+  global cur_line addr1 addr2
 
-	foreach {first p addr1 addr2 addr} {1 0} break
+  foreach {first p addr1 addr2 addr} {1 0} break
 
-	# if <cr> alone it's +1p
-	# can't easily do in doCommand without fall-through
-	if {[string trim $line] == ""} {return [parse_line "+1p"]}
+  # if <cr> alone it's +1p
+  # can't easily do in parse_command without fall-through
+  if {[string trim $line] == ""} {return [parse_line "+1p"]}
 
-	while 1 {
-		if {[set addr [get_addr $line p $addr]] == -1} {return -1}
-		set ch [string index $line $p]
-		if {$addr == "" && $first} {
-			if {$ch == ","} {
-				foreach {addr1 addr2} [list $addr2 1] break
-				set addr [last_line]
-			} elseif {$ch == ";"} {
-				foreach {addr1 addr2} [list $addr2 $curLine] break
-				set addr [last_line]
-			}
-		} else {
-			foreach {addr1 addr2} [list $addr2 $addr] break
-		}
-		if {$ch == ";"} {
-			set curLine $addr
-		} elseif {$ch != ","} break
-		incr p ;# only incr if it was a sep, else we gobble up cmd
-		set first 0
-	}
-	return [doCommand [string range $line $p end]]
+  while 1 {
+    if {[set addr [parse_address $line p $addr]] == -1} {return -1}
+    set ch [string index $line $p]
+    if {$addr == "" && $first} {
+      if {$ch == ","} {
+        foreach {addr1 addr2} [list $addr2 1] break
+        set addr [last_line]
+      } elseif {$ch == ";"} {
+        foreach {addr1 addr2} [list $addr2 $cur_line] break
+        set addr [last_line]
+      }
+    } else {
+      foreach {addr1 addr2} [list $addr2 $addr] break
+    }
+    if {$ch == ";"} {
+      set cur_line $addr
+    } elseif {$ch != ","} break
+    incr p ;# only incr if it was a sep, else we gobble up cmd
+    set first 0
+  }
+  return [parse_command [string range $line $p end]]
 }
 
-proc setErr {msg} {
-	global errMsg modeH
+proc set_error {str} {
+  global err_str flag_h
 
-	set errMsg $msg
-	if {$modeH != 0} putErr
-	puts "?"
+  set err_str $str
+  if {$flag_h != 0} put_error
+  puts "?"
 
-	return -1
+  return -1
 }
 
-proc putErr {} {
-	global errMsg
+proc put_error {} {
+  global err_str
 
-	puts stderr $errMsg
+  puts stderr $err_str
 }
 
-#no args means allow no addresses (ie: f command)
-#if you only want 1 address, specify both as same thing
 proc check_addrs {{defaddr1 ""} {defaddr2 ""} {allowzero 0}} {
-	global addr1 addr2
+  global addr1 addr2
 
-	if {$addr2 == ""} {	;# implies addr1 == "", ie. zero addresses
-		if {$defaddr1 == ""} {return 0}
-		set addr2 [expr {$defaddr2 == "" ? $defaddr1 : $defaddr2}]
-		set addr1 $defaddr1
-	} else {
-		if {$defaddr1 == ""} {return [setErr "Address not expected"]}
-		if {$addr1 == ""} {set addr1 $addr2}
-	}
+  if {$addr2 == ""} { ;# implies addr1 == "", ie. zero addresses
+    if {$defaddr1 == ""} {return 0}
+    set addr2 [expr {$defaddr2 == "" ? $defaddr1 : $defaddr2}]
+    set addr1 $defaddr1
+  } else {
+    if {$defaddr1 == ""} {return [set_error "Address not expected"]}
+    if {$addr1 == ""} {set addr1 $addr2}
+  }
 
-	if {$addr1 == 0 && ! $allowzero} {
-		return [setErr "Invalid address"]
-	}
-	if {$addr1 > $addr2 || $addr1 < 0 || $addr2 > [last_line]} {
-		return [setErr "Invalid address range"]
-	}
+  if {$addr1 == 0 && !$allowzero} {
+    return [set_error "Invalid address"]
+  }
+  if {$addr1 > $addr2 || $addr1 < 0 || $addr2 > [last_line]} {
+    return [set_error "Invalid address range"]
+  }
 
-	return 0
+  return 0
 }
 
 # return 2 == exit program
 # return -1 = error with command
 # return 0 == normal
-proc doCommand {cmd} {
-	global curLine bufLines dirty modeH prompt dbg_addrlist addr1 addr2 marks
-	global fileName
+proc parse_command {cmd} {
+  global cur_line buffer flag_dirty flag_h flag_prompt addr1 addr2 marks
+  global file_name
 
-	set rest  ""
-	set suffix ""
+  set rest  ""
+  set suffix ""
 
-	regexp {(.)((?:[nlp]?)*)(.*)} $cmd -> cmd suffix rest
+  regexp {(.)((?:[nlp]?)*)(.*)} $cmd -> cmd suffix rest
 
-	switch -glob -- $cmd {
-		"" -
-		[lnp] {
-			if {[check_addrs $curLine] != 0} {return -1}
-			if {$cmd == "n" || [string first n $suffix] != -1} {
-				set n [expr {$addr1 - 1}]
-			} else {
-				set n ""
-			}
-			foreach line [get_buffer $addr1 $addr2] {
-				if {$n != ""} {puts "[incr n]\t$line" } else { puts $line}
-			}
-		} [ai] {
-			if {[check_addrs $curLine "" 1] != 0} {return -1}
-			set addr $addr2 ;# shouldnt really change our global huh?
-			#intermediate buf incase they bail? or nah?
-			set ibuf {}
-			while {[gets stdin line] != -1 && $line != "."} {
-				lappend ibuf $line
-			}
-			if {$cmd == "i"} {
-				if {$addr == 0} {incr addr}
-				incr addr -1 ;#insert before
-			}
-			incr addr -1 ;# we're preincrementing
-			foreach line $ibuf {
-				set bufLines [linsert $bufLines [incr addr] $line]
-			}
-			incr addr ;# 0>1 indexing
-			set curLine $addr
-			set dirty 1
-		} d {
-			if {[check_addrs $curLine] != 0} {return -1}
-			set bufLines [lreplace $bufLines [expr {$addr1 - 1}] [expr {$addr2 - 1}]]
-			set curLine $addr1
-			if {$curLine > [last_line]} {set curLine [last_line]}
-			set dirty 1
-		} D {
-			puts "addrlist=($addr1,$addr2) modeH=$modeH dirty=$dirty prompt=$prompt curLine=$curLine last=[last_line] fileName=$fileName"
-		} e {
-			if {[check_addrs] != 0} {return -1}
-			if {$rest != ""} {set fileName [string trim $rest]}
-			if {$fileName == ""} {return [setErr "No filename set"]}
-			readfile $fileName -1
-		} f {
-			if {[check_addrs] != 0} {return -1}
-			set p 0
-			while {[string is space -strict [string index $rest $p]]} {incr p}
-			if {$p < 1} {
-				return [setErr "Unexpected command suffix"]
-			}
-			set fileName [string range $rest $p end]
-		} H {
-			if {[check_addrs] != 0} {return -1}
-			set modeH [expr {!$modeH}]
-		} h {
-			if {[check_addrs] != 0} {return -1}
-			putErr
-		} k {
-			if {[check_addrs $curLine] != 0} {return -1}
-			set m [string index $rest 0]
-			if {[string is lower -strict $m] != 1} {
-				return [setErr "Invalid mark"]
-			}
-			set marks($m) $addr2
-		} P {
-			if {[check_addrs] != 0} {return  -1}
-			set prompt [expr {!$prompt}]
-		} q {
-			if {[check_addrs] != 0} {return -1}
-			if {$dirty == 1} {
-				setErr "Warning: modified buffer"
-				incr dirty
-				return 0
-			} else {
-				return 2
-			}
-		} Q {
-			if {[check_addrs] != 0} {return -1}
-			return 2
-		} w {
-			if {[check_addrs 1 [last_line]] != 0} {return -1}
-			if {[regexp {(?:[[:space:]]+)([^[:space:]]+)} $rest -> fn]} {
-				writefile $fn
-			} else {
-				writefile $fileName
-			}
-			set dirty 0
-		} = {
-			if {[check_addrs 1 [last_line] 1] != 0} {return -1}
-			puts "$addr2"
-		} * {
-			return [setErr "Invalid command"]
-		}
-	}
+  switch -glob -- $cmd {
+    "" -
+    [lnp] {
+      if {[check_addrs $cur_line] != 0} {return -1}
+      if {$cmd == "n" || [string first n $suffix] != -1} {
+        set n [expr {$addr1 - 1}]
+      } else {
+        set n ""
+      }
+      foreach line [get_buffer $addr1 $addr2] {
+        if {$n != ""} {puts "[incr n]\t$line" } else { puts $line}
+      }
+    } [ai] {
+      if {[check_addrs $cur_line "" 1] != 0} {return -1}
+      set addr $addr2 ;# shouldnt really change our global huh?
+      #intermediate buf incase they bail? or nah?
+      set ibuf {}
+      while {[gets stdin line] != -1 && $line != "."} {
+        lappend ibuf $line
+      }
+      if {$cmd == "i"} {
+        if {$addr == 0} {incr addr}
+        incr addr -1 ;#insert before
+      }
+      incr addr -1 ;# we're preincrementing
+      foreach line $ibuf {
+        set buffer [linsert $buffer [incr addr] $line]
+      }
+      incr addr ;# 0>1 indexing
+      set cur_line $addr
+      set flag_dirty 1
+    } d {
+      if {[check_addrs $cur_line] != 0} {return -1}
+      set buffer [lreplace $buffer [expr {$addr1 - 1}] [expr {$addr2 - 1}]]
+      set cur_line $addr1
+      if {$cur_line > [last_line]} {set cur_line [last_line]}
+      set flag_dirty 1
+    } D {
+      puts "addrlist=($addr1,$addr2) flag_h=$flag_h flag_dirty=$flag_dirty flag_prompt=$flag_prompt cur_line=$cur_line last=[last_line] file_name=$file_name"
+    } e {
+      if {[check_addrs] != 0} {return -1}
+      if {$rest != ""} {set file_name [string trim $rest]}
+      if {$file_name == ""} {return [set_error "No filename set"]}
+      read_file $file_name -1
+    } f {
+      if {[check_addrs] != 0} {return -1}
+      set p 0
+      while {[string is space -strict [string index $rest $p]]} {incr p}
+      if {$p < 1} {
+        return [set_error "Unexpected command suffix"]
+      }
+      set file_name [string range $rest $p end]
+    } H {
+      if {[check_addrs] != 0} {return -1}
+      set flag_h [expr {!$flag_h}]
+    } h {
+      if {[check_addrs] != 0} {return -1}
+      put_error
+    } k {
+      if {[check_addrs $cur_line] != 0} {return -1}
+      set m [string index $rest 0]
+      if {[string is lower -strict $m] != 1} {
+        return [set_error "Invalid mark"]
+      }
+      set marks($m) $addr2
+    } P {
+      if {[check_addrs] != 0} {return  -1}
+      set flag_prompt [expr {!$flag_prompt}]
+    } q {
+      if {[check_addrs] != 0} {return -1}
+      if {$flag_dirty == 1} {
+        set_error "Warning: modified buffer"
+        incr flag_dirty
+        return 0
+      } else {
+        return 2
+      }
+    } Q {
+      if {[check_addrs] != 0} {return -1}
+      return 2
+    } w {
+      if {[check_addrs 1 [last_line]] != 0} {return -1}
+      if {[regexp {(?:[[:space:]]+)([^[:space:]]+)} $rest -> fn]} {
+        write_file $fn
+      } else {
+        write_file $file_name
+      }
+      set flag_dirty 0
+    } = {
+      if {[check_addrs 1 [last_line] 1] != 0} {return -1}
+      puts "$addr2"
+    } * {
+      return [set_error "Invalid command"]
+    }
+  }
 }
 
 proc usage {} {
-	puts {Usage: ed [-p prompt] [-s] file}
+  puts {Usage: ed [-p prompt] [-s] file}
 }
 
 for {set i 0} {$i < $::argc} {incr i} {
-	set a [lindex $::argv $i]
-	switch -glob -- $a {
-		-p {
-			incr i
-			set promptStr [lindex $::argv $i]
-			set prompt 1
-		}
-		-s {set silent 1}
-		-* {
-			puts "unk option: $a"
-		}
-		* {
-			set fileName $a
-			break
-		}
-	}
+  set a [lindex $::argv $i]
+  switch -glob -- $a {
+    -p {
+      incr i
+      set prompt_str [lindex $::argv $i]
+      set flag_prompt 1
+    } -s {
+      set flag_silent 1
+    } -* {
+      puts "unk option: $a"
+    } * {
+      set file_name $a
+      break
+    }
+  }
 }
 
-if {$fileName != ""} {
-	readfile $fileName 0
-}
+if {$file_name != ""} {read_file $file_name 0}
 
 while 1 {
-	if {$prompt} {
-		puts -nonewline $promptStr
-		flush stdout
-	}
-	if {[gets stdin line] == -1 || [parse_line $line] == 2} break
+  if {$flag_prompt} {
+    puts -nonewline $prompt_str
+    flush stdout
+  }
+  if {[gets stdin line] == -1 || [parse_line $line] == 2} break
 }
 
 return 0
