@@ -16,10 +16,10 @@ set file_name ""
 set addr1 ""
 set addr2 ""
 
-proc read_file {file line} {
+proc read_file {fn line} {
   global buffer cur_line flag_silent
 
-  if {[catch {set fd [open "$file" "r"]}]} {
+  if {[catch {set fd [open "$fn" "r"]}]} {
     return [set_error "Cannot open file"]
   }
   fconfigure $fd -encoding binary -translation {binary binary}
@@ -45,17 +45,17 @@ proc write_file {fn} {
   }
   fconfigure $fd -encoding binary -translation {binary binary}
 
-  set buf [join [get_buffer $addr1 $addr2] "\n"]
+  set buf [join [get_buffer] "\n"]
   puts $fd $buf ;# this adds a \n
   close $fd
   if {!$flag_silent} {puts [expr {1 + [string length $buf]}]}
   return 0
 }
 
-proc get_buffer {start end} {
-  global buffer
+proc get_buffer {} {
+  global buffer addr1 addr2
   
-  return [lrange $buffer [expr {$start - 1}] [expr {$end - 1}]]
+  return [lrange $buffer [expr {$addr1 - 1}] [expr {$addr2 - 1}]]
 }
 
 proc last_line {} {
@@ -114,7 +114,8 @@ proc parse_address {line rp addr} {
     if {![string match {[-+0-9]} [string index $line $p]]} break
 
     # dont skip spaces here. POSIX wants "3 ---- 2" = 1
-    if {[regexp {^([-+]?)([0-9]*)} [string range $line $p end] off sign digits]} {
+    if {[regexp {^([-+]?)([0-9]*)} [string range $line $p end] \
+      off sign digits]} {
       incr p [string length $off]
       if {$digits == ""} {set off [expr 0 $sign 1]}
       incr addr $off
@@ -193,6 +194,56 @@ proc check_addrs {{defaddr1 ""} {defaddr2 ""} {allowzero 0}} {
   return 0
 }
 
+proc cmd_s {rest} {
+  global buffer addr1 addr2 cur_line flag_dirty
+
+  if {[string index $rest 0] != "/"} {return [set_error "Invalid"]}
+  set i 0
+  set len [string length $rest]
+  for {set i 1} {$i < $len && [string index $rest $i] != "/"} {incr i} {
+    if {[string index $rest $i] == "\\"} {incr i}
+  }
+  set re [string range $rest 1 [expr {$i - 1}]] ;# $i = /
+  for {set j [incr i]} {$i < $len && [string index $rest $j] != "/"} {incr j} {
+    if {[string index $rest $j] == "\\"} {incr j}
+  }
+  set rep [string range $rest $i [expr {$j - 1}]]
+  set flags [string range $rest [expr {$j + 1}] end]
+  puts "re($re) rep($rep) flags($flags)"
+  if {![regexp {[^0-9]*([0-9]+)} $flags -> cnt]} {set cnt 1}
+  if {[string match g $flags]} {set cnt 0}
+
+  # TODO(mute): simulate BRE; cleanup
+  set matches 0
+  for {set i [expr {$addr1 - 1}]} {$i < $addr2} {incr i} {
+    set occurance 0
+    set off 0
+    set line [lindex $buffer $i]
+    foreach range [regexp -all -indices -inline -- $re $line] {
+      incr occurance
+      if {$cnt != 0 && $occurance != $cnt} continue
+      foreach {start end} $range break
+      incr start $off
+      set old [string range $line $start end]
+      regsub $re $old $rep new
+      incr off [expr {[string length $new] - [string length $old]}]
+      set line "[string range $line 0 [expr {$start - 1}]]$new"
+      incr matches
+      set cur_line [expr {$i + 1}] ;#0-index
+      set s_line $line
+      if {$cnt != 0} break
+    }
+    if {$occurance > 0} {set buffer [lreplace $buffer $i $i $line]}
+  }
+  if {$matches > 0} {
+    if {[string match {[pnl]} $flags]} {puts $s_line}
+    set flag_dirty 1
+  } else {
+    return [set_error "No match"]
+  }
+  return 0
+}
+
 # return 2 == exit program
 # return -1 = error with command
 # return 0 == normal
@@ -214,7 +265,7 @@ proc parse_command {cmd} {
       } else {
         set n ""
       }
-      foreach line [get_buffer $addr1 $addr2] {
+      foreach line [get_buffer] {
         if {$n != ""} {puts "[incr n]\t$line" } else { puts $line}
       }
     } [ai] {
@@ -286,6 +337,11 @@ proc parse_command {cmd} {
     } Q {
       if {[check_addrs] != 0} {return -1}
       return 2
+    } s {
+      if {[check_addrs $cur_line] != 0} {return -1}
+      # TODO(mute): more concise after it works
+      # TODO(mute): check suffix?
+      return [cmd_s $rest]
     } w {
       if {[check_addrs 1 [last_line]] != 0} {return -1}
       if {[regexp {(?:[[:space:]]+)([^[:space:]]+)} $rest -> fn]} {
@@ -301,6 +357,7 @@ proc parse_command {cmd} {
       return [set_error "Invalid command"]
     }
   }
+  return 0
 }
 
 proc usage {} {
