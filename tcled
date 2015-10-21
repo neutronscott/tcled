@@ -19,7 +19,9 @@ set addr2 ""
 proc read_file {fn line} {
   global buffer cur_line flag_silent
 
-  if {[catch {set fd [open "$fn" "r"]}]} {
+  # do not open dirs!
+  if {![file isfile $fn]} {return [set_error "Not a file"]}
+  if {[catch {set fd [open $fn "r"]}]} {
     return [set_error "Cannot open file"]
   }
   fconfigure $fd -encoding binary -translation {binary binary}
@@ -70,7 +72,7 @@ proc last_line {} {
 }
 
 proc parse_address {line rp addr} {
-  global cur_line marks
+  global buffer cur_line marks
   upvar $rp p
 
   while {[string is space -strict [string index $line $p]]} {incr p}
@@ -97,6 +99,34 @@ proc parse_address {line rp addr} {
       regexp {[0-9]+} [string range $line $p end] num
       incr p [expr {[string length $num]}]
       set addr $num
+    } [/?] {
+      if {[set ch [string index $line $p]] == "?"} {
+        set direction -1
+      } else {
+        set direction 1
+      }
+      set start [incr p]
+      for {set len [string length $line]} {$p < $len &&
+        [string index $line $p] != $ch} {incr p} {}
+      set re [string range $line $start $p-1]
+      incr p ;# go past the ending /?
+      if {$re == ""} {
+        set re $last_search
+      } else {
+        set last_search $re
+      }
+      # search from cur_line to cur_line, wrapping around end.
+      set i $cur_line
+      set len [expr {[llength $buffer] - 2}]
+      for {set j 0} {$j <= $len} {incr j} {
+        if {[regexp "(?b)$re" [lindex $buffer $i]]} {
+          set addr [expr {$i + 1}]
+          break
+        }
+        incr i $direction
+        if {$i > $len || $i < 0} { set i [expr {$direction > 0 ? 0 : $len}] }
+      }
+      if {$addr == ""} {return [set_error "No match"]}
     } [-+] {
       set addr $cur_line
     } , {
@@ -166,7 +196,7 @@ proc set_error {str} {
 
   set err_str $str
   if {$flag_help != 0} put_error
-  puts "?"
+  puts stderr "?"
 
   return -1
 }
@@ -274,6 +304,7 @@ proc parse_command {cmd} {
       foreach line [get_buffer] {
         if {$n != ""} {puts "[incr n]\t$line" } else { puts $line}
       }
+      set cur_line $addr2
     } [ai] {
       if {[check_addrs $cur_line "" 1] != 0} {return -1}
       set addr $addr2 ;# shouldnt really change our global huh?
@@ -306,7 +337,7 @@ proc parse_command {cmd} {
       if {$rest != ""} {set file_name [string trim $rest]}
       if {$file_name == ""} {return [set_error "No filename set"]}
       if {[read_file $file_name -1] != 0} {return -1}
-      unset marks
+      if {[info exists marks]} {unset marks}
     } f {
       if {[check_addrs] != 0} {return -1}
       set p 0
@@ -318,6 +349,7 @@ proc parse_command {cmd} {
     } H {
       if {[check_addrs] != 0} {return -1}
       set flag_help [expr {!$flag_help}]
+      put_error
     } h {
       if {[check_addrs] != 0} {return -1}
       put_error
@@ -374,20 +406,25 @@ proc parse_command {cmd} {
 }
 
 proc usage {} {
-  puts "Usage: ed [-p prompt] [-s] file"
+  puts {Usage: ed [-p prompt] [-s] [-H] [file]}
+  puts "  -H turn on help mode right away."
 }
 
 for {set i 0} {$i < $::argc} {incr i} {
   set a [lindex $::argv $i]
   switch -glob -- $a {
-    -p {
+    -H {
+      set flag_help 1
+    } -p {
       incr i
       set prompt_str [lindex $::argv $i]
       set flag_prompt 1
     } -s {
       set flag_silent 1
     } -* {
-      puts "unk option: $a"
+      puts "unknown option: $a"
+      usage
+      return 1
     } * {
       set file_name $a
       read_file $file_name -1
