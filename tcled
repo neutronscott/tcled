@@ -29,8 +29,11 @@ proc read_file {fn line} {
   if {$line == -1} {
     set buffer [split $buf "\n"]
   } else {
-    # a text file ends with \n and split will leave us with an empty element at the end. :(
-    set buffer "[lrange $buffer 0 $line-1] [lrange [split $buf "\n"] 0 end-1] [lrange $buffer $line end]"
+    # a text file ends with \n and split will leave us with an empty element
+    # at the end. :(
+    # TODO(mute): Does this even work?
+    set buffer "[lrange $buffer 0 $line-1] [lrange [split $buf "\n"] 0 end-1] \
+    [lrange $buffer $line end]"
   }
   set cur_line [last_line]
 
@@ -71,8 +74,10 @@ proc last_line {} {
   return [expr {[llength $buffer] - 1}]
 }
 
+# TODO(mute): should this return 0-indexed number that works with our buffer list
+# to take math EVERYWHERE else? :P
 proc parse_address {line rp addr} {
-  global buffer cur_line marks
+  global buffer cur_line marks last_search
   upvar $rp p
 
   while {[string is space -strict [string index $line $p]]} {incr p}
@@ -108,10 +113,14 @@ proc parse_address {line rp addr} {
       set start [incr p]
       for {set len [string length $line]} {$p < $len &&
         [string index $line $p] != $ch} {incr p} {}
-      set re [string range $line $start $p-1]
+      set re [string range $line $start [expr {$p - 1}]]
       incr p ;# go past the ending /?
       if {$re == ""} {
-        set re $last_search
+        if {[info exist last_search]} {
+          set re $last_search
+        } else {
+          return [set_error "No RE"]
+        }
       } else {
         set last_search $re
       }
@@ -238,7 +247,7 @@ proc cmd_s {rest} {
   for {set i 1} {$i < $len && [string index $rest $i] != "/"} {incr i} {
     if {[string index $rest $i] == "\\"} {incr i}
   }
-  ;# Make ARE to make BRE
+  ;# (?b) interprete as BRE
   set re "(?b)[string range $rest 1 [expr {$i - 1}]]" ;# $i = /
   for {set j [incr i]} {$i < $len && [string index $rest $j] != "/"} {incr j} {
     if {[string index $rest $j] == "\\"} {incr j}
@@ -249,7 +258,7 @@ proc cmd_s {rest} {
   if {![regexp {[^0-9]*([0-9]+)} $flags -> cnt]} {set cnt 1}
   if {[string match g $flags]} {set cnt 0}
 
-  # TODO(mute): simulate BRE; cleanup
+  # TODO(mute): cleanup?
   set matches 0
   for {set i [expr {$addr1 - 1}]} {$i < $addr2} {incr i} {
     set occurance 0
@@ -290,11 +299,14 @@ proc parse_command {cmd} {
   set rest  ""
   set suffix ""
 
+  # TODO(mute): handle command suffix correctly. some commands it's much later
+  #             ie s/re/rep/suffix
   regexp {(.)((?:[nlp]?)*)(.*)} $cmd -> cmd suffix rest
 
   switch -glob -- $cmd {
     "" -
     [lnp] {
+      # cmd suffix here is undefined behavior
       if {[check_addrs $cur_line] != 0} {return -1}
       if {$cmd == "n" || [string first n $suffix] != -1} {
         set n [expr {$addr1 - 1}]
@@ -302,7 +314,7 @@ proc parse_command {cmd} {
         set n ""
       }
       foreach line [get_buffer] {
-        if {$n != ""} {puts "[incr n]\t$line" } else { puts $line}
+        if {$n != ""} {puts "[incr n]\t$line"} else {puts $line}
       }
       set cur_line $addr2
     } [ai] {
@@ -330,8 +342,6 @@ proc parse_command {cmd} {
       set cur_line $addr1
       if {$cur_line > [last_line]} {set cur_line [last_line]}
       set flag_dirty 1
-    } D {
-      puts "addrlist=($addr1,$addr2) flag_help=$flag_help flag_dirty=$flag_dirty flag_prompt=$flag_prompt cur_line=$cur_line last=[last_line] file_name=$file_name"
     } e {
       if {[check_addrs] != 0} {return -1}
       if {$rest != ""} {set file_name [string trim $rest]}
@@ -360,6 +370,28 @@ proc parse_command {cmd} {
         return [set_error "Invalid mark"]
       }
       set marks($m) $addr2
+    } [mt] {
+      if {[check_addrs $cur_line] != 0} {return -1}
+      set rp 0
+      if {[set dest [parse_address $rest rp ""]] == -1} {return -1}
+      if {$dest >= $addr1 && $dest <= $addr2} {
+        return [set_error "Invalid destination"]
+      }
+      # from line numbers to 0-index offset into buffer
+      foreach {start end dest} [list \
+        [expr {$addr1 - 1}] [expr {$addr2 - 1}] [expr {$dest - 1}]] break
+      set srclist [lrange $buffer $start $end]
+      set buffer "[lrange $buffer 0 $dest] $srclist [lrange $buffer \
+        [expr {1 + $dest}] end]" 
+      if {$cmd == "m"} {
+        if {$dest < $start} {
+          set offset [llength $srclist]
+          incr start $offset
+          incr end $offset
+        }
+        set buffer [lreplace $buffer $start $end]
+      }
+      set flag_dirty 1
     } P {
       if {[check_addrs] != 0} {return  -1}
       set flag_prompt [expr {!$flag_prompt}]
