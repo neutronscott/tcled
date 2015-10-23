@@ -317,17 +317,25 @@ proc parse_command {cmd} {
         if {$n != ""} {puts "[incr n]\t$line"} else {puts $line}
       }
       set cur_line $addr2
-    } [ai] {
+    } [aci] {
       if {[check_addrs $cur_line "" 1] != 0} {return -1}
-      set addr $addr2 ;# shouldnt really change our global huh?
       #intermediate buf incase they bail? or nah?
       set ibuf {}
       while {[gets stdin line] != -1 && $line != "."} {
         lappend ibuf $line
       }
       if {$cmd == "i"} {
+        set addr $addr2
         if {$addr == 0} {incr addr}
         incr addr -1 ;#insert before
+      } elseif {$cmd == "c"} {
+        set addr $addr1
+        if {$addr == 0} {incr addr}
+        if {$addr2 == 0} {incr addr2}
+        set buffer [lreplace $buffer [expr {$addr - 1}] [expr {$addr2 - 1}]]
+        incr addr -1 ;# something something idk
+      } else {
+        set addr $addr2
       }
       incr addr -1 ;# we're preincrementing
       foreach line $ibuf {
