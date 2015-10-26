@@ -16,6 +16,16 @@ set file_name ""
 set addr1 ""
 set addr2 ""
 
+# my advanced data structure so global works...
+proc map {fun list} {
+  set res {}
+  foreach element $list {lappend res [$fun $element]}
+  set res
+}
+proc prefix {prefix x} {return [list $prefix $x]}
+proc rem_prefix {x} {return [lindex $x 1]}
+interp alias {} add_prefix {} prefix unmark
+
 proc read_file {fn line} {
   global buffer cur_line flag_silent
 
@@ -29,7 +39,7 @@ proc read_file {fn line} {
   if {$line == -1} {
     # a text file ends with \n and split will leave us with an empty element
     # at the end. :(
-    set buffer "{} [lrange [split $buf "\n"] 0 end-1]"
+    set buffer "{} [map add_prefix [lrange [split $buf "\n"] 0 end-1]]"
   } else {
     # TODO(mute): Does this even work?
     set buffer "[lrange $buffer 0 $line-1] [lrange [split $buf "\n"] 0 end-1] \
@@ -64,8 +74,8 @@ proc write_file {fn} {
 
 proc get_buffer {} {
   global buffer addr1 addr2
-  
-  return [lrange $buffer $addr1 $addr2]
+
+  return [map rem_prefix [lrange $buffer $addr1 $addr2]]
 }
 
 proc last_line {} {
@@ -124,14 +134,14 @@ proc parse_address {line rp addr} {
       }
       # search from cur_line to cur_line, wrapping around end.
       set i $cur_line
-      set len [expr {[llength $buffer] - 2}]
-      for {set j 0} {$j <= $len} {incr j} {
+      set max [expr {[llength $buffer] - 1}]
+      for {set j 0} {$j < $max} {incr j} {
+        incr i $direction
+        if {$i > $max || $i < 1} {set i [expr {$direction > 0 ? 1 : $max}]}
         if {[regexp "(?b)$re" [lindex $buffer $i]]} {
-          set addr [expr {$i + 1}]
+          set addr $i
           break
         }
-        incr i $direction
-        if {$i > $len || $i < 0} { set i [expr {$direction > 0 ? 0 : $len}] }
       }
       if {$addr == ""} {return [set_error "No match"]}
     } [-+] {
@@ -236,6 +246,35 @@ proc check_addrs {{defaddr1 ""} {defaddr2 ""} {allowzero 0}} {
   return 0
 }
 
+proc cmd_g {rest} {
+  global buffer addr1 addr2 cur_line flag_dirty
+
+  set delim [string index $rest 0]
+  # TODO(mute): error if whitespace
+  set len [string length $rest]
+  for {set p 1} {$p < $len && [string index $rest $p] != $delim} {incr p} { }
+  set re [string range $rest 1 [expr {$p - 1}]]
+  set cmd [string range $rest [incr p] end]
+  # addr1 and addr2 are global and get changed by parse_line
+  foreach {start end} [list $addr1 $addr2] break
+  for {set i $start} {$i <= $end} {incr i} {
+    foreach {mark line} [lindex $buffer $i] break
+    if {[regexp -- $re $line]} {
+      set buffer [lreplace $buffer $i $i [list mark $line]]
+    }
+  }
+  while 1 {
+    # find it again... they might move ya know
+    for {set i 1;set end [last_line]} {$i <= $end} {incr i} {
+      foreach {mark line} [lindex $buffer $i] break
+      if {$mark == "mark"} break
+    }
+    if {$mark != "mark"} break
+    set buffer [lreplace $buffer $i $i [list unmark $line]]
+    parse_line "$i$cmd"
+  }
+}
+
 proc cmd_s {rest} {
   global buffer addr1 addr2 cur_line flag_dirty
 
@@ -309,21 +348,22 @@ proc parse_command {cmd} {
       foreach {p n l} {0 0 0} break
       if {$cmd == "n" || [string first n $suffix] != -1} {set n 1}
       if {$cmd == "l" || [string first l $suffix] != -1} {set l 1}
-      for {set i $addr1} {$i <= $addr2} {incr i} {
-        set line [lindex $buffer $i]
+      set i $addr1
+      foreach line [get_buffer] {
         if {$l} {
           set line [string map {"\a" {\a} "\b" {\b} "\f" {\f} "\n" {\n} \
               "\r" {\r} "\t" {\t} "\v" {\v}} $line]
         }
         if {$n} {set line "$i\t$line"}
         puts "$line"
+        incr i
       }
       set cur_line $addr2
     } B {
       puts "$buffer"
     } [aci] {
       if {[check_addrs $cur_line "" 1] != 0} {return -1}
-      #intermediate buf incase they bail? or nah?
+      # TODO(mute): intermediate buf needed?
       set ibuf {}
       while {[gets stdin line] != -1 && $line != "."} {
         lappend ibuf $line
@@ -340,8 +380,9 @@ proc parse_command {cmd} {
         set addr [expr {$addr2 + 1}] ;#go after
       }
       incr addr -1 ;# we're preincrementing
+      # TODO(mute): string concat
       foreach line $ibuf {
-        set buffer [linsert $buffer [incr addr] $line]
+        set buffer [linsert $buffer[set buffer {}] [incr addr] $line]
       }
       set cur_line $addr
       set flag_dirty 1
@@ -365,6 +406,9 @@ proc parse_command {cmd} {
         return [set_error "Unexpected command suffix"]
       }
       set file_name [string range $rest $p end]
+    } g {
+      if {[check_addrs 1 [last_line]] != 0} {return -1}
+      return [cmd_g $rest]
     } H {
       if {[check_addrs] != 0} {return -1}
       set flag_help [expr {!$flag_help}]
@@ -443,7 +487,7 @@ proc parse_command {cmd} {
       }
       set flag_dirty 0
     } = {
-      if {[check_addrs 1 [last_line] 1] != 0} {return -1}
+      if {[check_addrs [last_line] "" 1] != 0} {return -1}
       puts $addr2
     } * {
       return [set_error "Invalid command"]
