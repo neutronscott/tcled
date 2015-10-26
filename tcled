@@ -279,28 +279,26 @@ proc cmd_s {rest} {
   global buffer addr1 addr2 cur_line flag_dirty
 
   if {[string index $rest 0] != "/"} {return [set_error "Invalid"]}
-  set i 0
   set len [string length $rest]
   for {set i 1} {$i < $len && [string index $rest $i] != "/"} {incr i} {
     if {[string index $rest $i] == "\\"} {incr i}
   }
   ;# (?b) interprete as BRE
   set re "(?b)[string range $rest 1 [expr {$i - 1}]]" ;# $i = /
-  for {set j [incr i]} {$i < $len && [string index $rest $j] != "/"} {incr j} {
+  for {set j [incr i]} {$j < $len && [string index $rest $j] != "/"} {incr j} {
     if {[string index $rest $j] == "\\"} {incr j}
   }
   set rep [string range $rest $i [expr {$j - 1}]]
   set flags [string range $rest [expr {$j + 1}] end]
-  puts "re($re) rep($rep) flags($flags)"
   if {![regexp {[^0-9]*([0-9]+)} $flags -> cnt]} {set cnt 1}
-  if {[string match g $flags]} {set cnt 0}
+  if {[string match *g* $flags]} {set cnt 0}
 
   # TODO(mute): cleanup?
   set matches 0
-  for {set i $addr1} {$i < $addr2} {incr i} {
+  for {set i $addr1} {$i <= $addr2} {incr i} {
     set occurance 0
     set off 0
-    set line [lindex $buffer $i]
+    foreach {mark line} [lindex $buffer $i] break
     foreach range [regexp -all -indices -inline -- $re $line] {
       incr occurance
       if {$cnt != 0 && $occurance != $cnt} continue
@@ -315,10 +313,10 @@ proc cmd_s {rest} {
       set s_line $line
       if {$cnt != 0} break
     }
-    if {$occurance > 0} {set buffer [lreplace $buffer $i $i $line]}
+    if {$occurance > 0} {set buffer [lreplace $buffer $i $i [list unmark $line]]}
   }
   if {$matches > 0} {
-    if {[string match {[pnl]} $flags]} {puts $s_line}
+    if {[string match {*[pnl]*} $flags]} {puts $s_line}
     set flag_dirty 1
   } else {
     return [set_error "No match"]
@@ -366,7 +364,7 @@ proc parse_command {cmd} {
       # TODO(mute): intermediate buf needed?
       set ibuf {}
       while {[gets stdin line] != -1 && $line != "."} {
-        lappend ibuf $line
+        lappend ibuf [list unmark $line]
       }
       if {$cmd == "i"} {
         set addr $addr2
@@ -419,7 +417,7 @@ proc parse_command {cmd} {
     } j {
       if {[check_addrs $cur_line [expr {$cur_line + 1}]] != 0} {return -1}
       if {$addr2 > $addr1} {
-        set buffer [lreplace $buffer $addr1 $addr2 [join [get_buffer] ""]]
+        set buffer [lreplace $buffer $addr1 $addr2 [add_prefix [join [get_buffer] ""]]]
       }
       set cur_line [incr $addr1]
       set flag_dirty 1
@@ -439,6 +437,7 @@ proc parse_command {cmd} {
       }
       set srclist [get_buffer]
       set offset 0
+      # TODO(mute): FIX TO USE G/ PREFIXED BUFFER~!!!!
       set buffer "[lrange $buffer 0 $dest] $srclist [lrange $buffer \
           [expr {1 + $dest}] end]" 
       if {$cmd == "m"} {
