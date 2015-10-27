@@ -261,7 +261,7 @@ proc cmd_g {rest} {
   for {set i $start} {$i <= $end} {incr i} {
     foreach {mark line} [lindex $buffer $i] break
     if {[regexp -- $re $line]} {
-      set buffer [lreplace $buffer $i $i [list mark $line]]
+      set buffer [lreplace $buffer[set buffer {}] $i $i [list mark $line]]
     }
   }
   set flag_inglobal 1
@@ -272,7 +272,7 @@ proc cmd_g {rest} {
       if {$mark == "mark"} break
     }
     if {$mark != "mark"} break
-    set buffer [lreplace $buffer $i $i [list unmark $line]]
+    set buffer [lreplace $buffer[set buffer {}] $i $i [list unmark $line]]
     set cur_line $i
     parse_line "$cmd"
   }
@@ -280,19 +280,25 @@ proc cmd_g {rest} {
 }
 
 proc cmd_s {rest} {
-  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal
+  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal last_rep
 
-  if {[string index $rest 0] != "/"} {return [set_error "Invalid"]}
+  set delim [string index $rest 0]
+  if {$delim == " "} {return [set_error "Invalid delimiter"]}
   set len [string length $rest]
-  for {set i 1} {$i < $len && [string index $rest $i] != "/"} {incr i} {
+  for {set i 1} {$i < $len && [string index $rest $i] != $delim} {incr i} {
     if {[string index $rest $i] == "\\"} {incr i}
   }
   ;# (?b) interprete as BRE
   set re "(?b)[string range $rest 1 [expr {$i - 1}]]" ;# $i = /
-  for {set j [incr i]} {$j < $len && [string index $rest $j] != "/"} {incr j} {
+  for {set j [incr i]} {$j < $len && [string index $rest $j] != $delim} {incr j} {
     if {[string index $rest $j] == "\\"} {incr j}
   }
   set rep [string range $rest $i [expr {$j - 1}]]
+  if {$rep == "%"} {
+    if {[info exists last_rep]} {set rep $last_rep}
+  } else {
+    set last_rep $rep
+  }
   set flags [string range $rest [expr {$j + 1}] end]
   if {![regexp {[^0-9]*([0-9]+)} $flags -> cnt]} {set cnt 1}
   if {[string match *g* $flags]} {set cnt 0}
@@ -317,7 +323,7 @@ proc cmd_s {rest} {
       set s_line $line
       if {$cnt != 0} break
     }
-    if {$occurance > 0} {set buffer [lreplace $buffer $i $i [list unmark $line]]}
+    if {$occurance > 0} {set buffer [lreplace $buffer[set buffer {}] $i $i [list unmark $line]]}
   }
   if {$matches > 0} {
     if {[string match {*[pnl]*} $flags]} {puts $s_line}
@@ -377,7 +383,7 @@ proc parse_command {cmd} {
         set addr $addr1
         if {$addr == 0} {set addr 1}
         if {$addr2 == 0} {set addr2 1}
-        set buffer [lreplace $buffer $addr $addr2]
+        set buffer [lreplace $buffer[set buffer {}] $addr $addr2]
       } else {
         set addr [expr {$addr2 + 1}] ;#go after
       }
@@ -390,7 +396,7 @@ proc parse_command {cmd} {
       set flag_dirty 1
     } d {
       if {[check_addrs $cur_line] != 0} {return -1}
-      set buffer [lreplace $buffer $addr1 $addr2]
+      set buffer [lreplace $buffer[set buffer {}] $addr1 $addr2]
       set cur_line $addr1
       if {$cur_line > [last_line]} {set cur_line [last_line]}
       set flag_dirty 1
@@ -450,7 +456,7 @@ proc parse_command {cmd} {
           incr addr1 $offset
           incr addr2 $offset
         }
-        set buffer [lreplace $buffer $addr1 $addr2]
+        set buffer [lreplace $buffer[set buffer {}] $addr1 $addr2]
       }
       set cur_line [expr {$dest + $offset}]
       set flag_dirty 1
