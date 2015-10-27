@@ -12,6 +12,7 @@ set flag_help 0
 set flag_silent 0
 set flag_dirty 0
 set flag_prompt 0
+set flag_inglobal 0
 set file_name ""
 set addr1 ""
 set addr2 ""
@@ -247,7 +248,7 @@ proc check_addrs {{defaddr1 ""} {defaddr2 ""} {allowzero 0}} {
 }
 
 proc cmd_g {rest} {
-  global buffer addr1 addr2 cur_line flag_dirty
+  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal
 
   set delim [string index $rest 0]
   # TODO(mute): error if whitespace
@@ -263,6 +264,7 @@ proc cmd_g {rest} {
       set buffer [lreplace $buffer $i $i [list mark $line]]
     }
   }
+  set flag_inglobal 1
   while 1 {
     # find it again... they might move ya know
     for {set i 1;set end [last_line]} {$i <= $end} {incr i} {
@@ -271,12 +273,14 @@ proc cmd_g {rest} {
     }
     if {$mark != "mark"} break
     set buffer [lreplace $buffer $i $i [list unmark $line]]
-    parse_line "$i$cmd"
+    set cur_line $i
+    parse_line "$cmd"
   }
+  set flag_inglobal 0
 }
 
 proc cmd_s {rest} {
-  global buffer addr1 addr2 cur_line flag_dirty
+  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal
 
   if {[string index $rest 0] != "/"} {return [set_error "Invalid"]}
   set len [string length $rest]
@@ -318,7 +322,7 @@ proc cmd_s {rest} {
   if {$matches > 0} {
     if {[string match {*[pnl]*} $flags]} {puts $s_line}
     set flag_dirty 1
-  } else {
+  } elseif {$flag_inglobal == 0} {
     return [set_error "No match"]
   }
   return 0
