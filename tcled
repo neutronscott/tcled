@@ -86,7 +86,7 @@ proc last_line {} {
 }
 
 proc parse_address {line rp addr} {
-  global buffer cur_line marks last_search
+  global buffer cur_line marks last_re
   upvar $rp p
 
   while {[string is space -strict [string index $line $p]]} {incr p}
@@ -125,13 +125,13 @@ proc parse_address {line rp addr} {
       set re [string range $line $start [expr {$p - 1}]]
       incr p ;# go past the ending /?
       if {$re == ""} {
-        if {[info exist last_search]} {
-          set re $last_search
+        if {[info exist last_re]} {
+          set re $last_re
         } else {
-          return [set_error "No RE"]
+          return [set_error "No previous pattern"]
         }
       } else {
-        set last_search $re
+        set last_re $re
       }
       # search from cur_line to cur_line, wrapping around end.
       set i $cur_line
@@ -248,13 +248,22 @@ proc check_addrs {{defaddr1 ""} {defaddr2 ""} {allowzero 0}} {
 }
 
 proc cmd_g {rest} {
-  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal
+  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal last_re
 
   set delim [string index $rest 0]
-  # TODO(mute): error if whitespace
+  if {$delim == " "} {return [set_error "Invalid delimiter"]}
   set len [string length $rest]
   for {set p 1} {$p < $len && [string index $rest $p] != $delim} {incr p} { }
   set re [string range $rest 1 [expr {$p - 1}]]
+  if {$re == ""} {
+    if {[info exists last_re]} {
+      set re $last_re
+    } else {
+      return [set_error "No previous pattern"]
+    }
+  } else {
+    set last_re $re
+  }
   set cmd [string range $rest [incr p] end]
   # addr1 and addr2 are global and get changed by parse_line
   foreach {start end} [list $addr1 $addr2] break
@@ -280,7 +289,7 @@ proc cmd_g {rest} {
 }
 
 proc cmd_s {rest} {
-  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal last_rep
+  global buffer addr1 addr2 cur_line flag_dirty flag_inglobal last_rep last_re
 
   set delim [string index $rest 0]
   if {$delim == " "} {return [set_error "Invalid delimiter"]}
@@ -288,8 +297,18 @@ proc cmd_s {rest} {
   for {set i 1} {$i < $len && [string index $rest $i] != $delim} {incr i} {
     if {[string index $rest $i] == "\\"} {incr i}
   }
+  set re "[string range $rest 1 [expr {$i - 1}]]" ;# $i = /
+  if {$re == ""} {
+    if {[info exist last_re]} {
+      set re $last_re
+    } else {
+      return [set_error "No previous pattern"]
+    }
+  } else {
+    set last_re $re
+  }
   ;# (?b) interprete as BRE
-  set re "(?b)[string range $rest 1 [expr {$i - 1}]]" ;# $i = /
+  set re "(?b)$re"
   for {set j [incr i]} {$j < $len && [string index $rest $j] != $delim} {incr j} {
     if {[string index $rest $j] == "\\"} {incr j}
   }
